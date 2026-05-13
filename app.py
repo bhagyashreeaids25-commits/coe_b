@@ -160,3 +160,167 @@ if image is not None:
             file_name="scanned_document.pdf",
             mime="application/pdf"
         )
+import streamlit as st
+from PIL import Image
+from io import BytesIO
+import cv2
+import numpy as np
+
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="Adobe Scan Style PDF Converter",
+    page_icon="📄",
+    layout="centered"
+)
+
+st.title("📄 Smart Document Scanner")
+
+st.write(
+    "Upload an image and convert it into a clean scanned PDF "
+    "similar to Adobe Scan."
+)
+
+# ---------------- FILE UPLOAD ----------------
+uploaded_file = st.file_uploader(
+    "Upload an Image",
+    type=["png", "jpg", "jpeg", "webp"]
+)
+
+# ---------------- IMAGE PROCESSING FUNCTION ----------------
+def scan_document(pil_image):
+
+    # Convert PIL image to OpenCV format
+    image = np.array(pil_image)
+
+    # Convert RGB to BGR
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    # Resize for better processing
+    ratio = image.shape[0] / 500.0
+    orig = image.copy()
+
+    height = 500
+    resized = cv2.resize(
+        image,
+        (int(image.shape[1] / ratio), height)
+    )
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+    # Blur to remove noise
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Edge detection
+    edged = cv2.Canny(gray, 75, 200)
+
+    # Find contours
+    contours, _ = cv2.findContours(
+        edged.copy(),
+        cv2.RETR_LIST,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    screen_contour = None
+
+    # Detect document edges
+    for contour in contours:
+        peri = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+
+        if len(approx) == 4:
+            screen_contour = approx
+            break
+
+    # If no document detected
+    if screen_contour is None:
+        processed = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        # Warp perspective
+        pts = screen_contour.reshape(4, 2) * ratio
+
+        rect = np.zeros((4, 2), dtype="float32")
+
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
+
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]
+        rect[3] = pts[np.argmax(diff)]
+
+        (tl, tr, br, bl) = rect
+
+        widthA = np.linalg.norm(br - bl)
+        widthB = np.linalg.norm(tr - tl)
+        maxWidth = max(int(widthA), int(widthB))
+
+        heightA = np.linalg.norm(tr - br)
+        heightB = np.linalg.norm(tl - bl)
+        maxHeight = max(int(heightA), int(heightB))
+
+        dst = np.array([
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1]
+        ], dtype="float32")
+
+        M = cv2.getPerspectiveTransform(rect, dst)
+
+        warped = cv2.warpPerspective(
+            orig,
+            M,
+            (maxWidth, maxHeight)
+        )
+
+        # Convert to grayscale
+        processed = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+
+    # Adaptive threshold for Adobe Scan effect
+    processed = cv2.adaptiveThreshold(
+        processed,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11,
+        2
+    )
+
+    return Image.fromarray(processed)
+
+# ---------------- MAIN APP ----------------
+if uploaded_file is not None:
+
+    image = Image.open(uploaded_file).convert("RGB")
+
+    st.subheader("Original Image")
+    st.image(image, use_container_width=True)
+
+    if st.button("Convert to Scanned PDF"):
+
+        scanned = scan_document(image)
+
+        st.subheader("Scanned Preview")
+        st.image(scanned, use_container_width=True)
+
+        # Convert to PDF
+        pdf_buffer = BytesIO()
+
+        pdf_image = scanned.convert("RGB")
+
+        pdf_image.save(pdf_buffer, format="PDF")
+
+        pdf_buffer.seek(0)
+
+        st.success("PDF created successfully!")
+
+        # Download button
+        st.download_button(
+            label="⬇ Download Scanned PDF",
+            data=pdf_buffer,
+            file_name="scanned_document.pdf",
+            mime="application/pdf"
+        )
