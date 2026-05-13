@@ -69,3 +69,4 @@ if uploaded_file is not None:
             data=pdf_buffer,
             file_name="scanned_document.pdf",
             mime="application/pdf"
+        )
